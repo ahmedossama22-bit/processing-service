@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
+require('express-async-errors');
+
 const amqp = require('amqplib');
 const redis = require('redis');
 const cors = require('cors');
@@ -16,14 +17,24 @@ app.use(cors({
 
 const PORT = process.env.PORT || 3002;
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/content_tasks')
-    .then(() => console.log('Processing Service connected to MongoDB'))
-    .catch(err => console.error('MongoDB connection error:', err));
+// Connect to PostgreSQL
+const sequelize = Task.sequelize;
+sequelize.authenticate()
+    .then(() => {
+        console.log('Processing Service connected to PostgreSQL');
+        return sequelize.sync();
+    })
+    .catch(err => {
+        console.error('PostgreSQL connection error:', err);
+        process.exit(1);
+    });
 
 // Connect to Redis
 const redisClient = redis.createClient({ url: process.env.REDIS_URI || 'redis://localhost:6379' });
-redisClient.on('error', (err) => console.log('Redis Client Error', err));
+redisClient.on('error', (err) => {
+    console.error('Redis Client Error', err);
+    process.exit(1);
+});
 redisClient.connect().then(() => console.log('Processing Service connected to Redis'));
 
 // Function to process text synchronously (Quick task)
@@ -58,13 +69,13 @@ async function startConsumer() {
                 
                 try {
                     // Update task status
-                    await Task.findByIdAndUpdate(taskId, { status: 'processing' });
+                    await Task.update({ status: 'processing' }, { where: { _id: taskId } });
                     
                     // Simulate heavy processing
                     const result = await processHeavy(text);
                     
                     // Update task in DB
-                    await Task.findByIdAndUpdate(taskId, { status: 'completed', result });
+                    await Task.update({ status: 'completed', result }, { where: { _id: taskId } });
                     
                     // Cache result in Redis
                     await redisClient.set(`task_result:${taskId}`, result, { EX: 3600 }); // Expire in 1 hour
@@ -73,13 +84,14 @@ async function startConsumer() {
                     channel.ack(msg);
                 } catch (err) {
                     console.error('Error processing async task:', err);
-                    await Task.findByIdAndUpdate(taskId, { status: 'failed' });
+                    await Task.update({ status: 'failed' }, { where: { _id: taskId } });
                     channel.nack(msg);
                 }
             }
         });
     } catch (err) {
         console.error('RabbitMQ connection error in consumer:', err);
+        process.exit(1);
     }
 }
 startConsumer();
@@ -99,8 +111,15 @@ app.post('/process/sync', async (req, res) => {
         
         return res.json({ result });
     } catch (err) {
+        console.error('[Processing Service] Error processing sync task:', err);
         return res.status(500).json({ error: err.message });
     }
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+    console.error('[Processing Service] Unhandled Error:', err);
+    res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
 });
 
 app.listen(PORT, () => {
