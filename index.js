@@ -4,16 +4,12 @@ require('express-async-errors');
 
 const amqp = require('amqplib');
 const redis = require('redis');
-const cors = require('cors');
+
 const Task = require('./Task');
 
 const app = express();
 app.use(express.json());
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
+
 
 const PORT = process.env.PORT || 3002;
 
